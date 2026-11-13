@@ -3,100 +3,55 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>my location</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<title>share location</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: #111; color: #eee;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #111; color: #eee; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 16px;
   }
-  .top { padding: 16px; text-align: center; background: #1b1b1b; border-bottom: 1px solid #333; }
-  button {
-    font-size: 17px; padding: 14px 24px; border: none; border-radius: 12px;
-    background: #4f8cff; color: #fff; cursor: pointer; width: 100%; max-width: 320px;
-  }
+  .card { background: #1b1b1b; border-radius: 16px; padding: 32px 24px; max-width: 360px; width: 100%; text-align: center; }
+  button { font-size: 18px; padding: 16px 24px; width: 100%; border: none; border-radius: 12px; background: #4f8cff; color: #fff; cursor: pointer; }
   button:disabled { opacity: 0.5; }
-  .muted { color: #999; font-size: 13px; margin-top: 10px; }
-  .error { color: #ff8080; font-size: 13px; margin-top: 10px; }
-  #map { height: 45vh; width: 100%; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { padding: 6px 10px; border-bottom: 1px solid #2a2a2a; text-align: left; }
-  tr:hover { background: #1f1f1f; cursor: pointer; }
-  .wrap { max-height: 35vh; overflow-y: auto; }
-  .row { display: flex; justify-content: center; gap: 8px; padding: 8px; }
-  .row button.secondary { background: #333; max-width: 160px; font-size: 14px; padding: 8px 12px; }
+  .muted { color: #999; font-size: 14px; margin-top: 12px; }
+  .error { color: #ff8080; font-size: 14px; margin-top: 12px; }
+  .ok { font-size: 20px; margin-bottom: 8px; }
+  a { color: #4f8cff; }
 </style>
 </head>
 <body>
+  <div class="card" id="card">
+    <button id="btn">share location</button>
+    <p class="muted" id="helper">one tap, nothing saved on this device</p>
+  </div>
 
-<div class="top">
-  <button id="btn">share my location</button>
-  <p class="muted" id="helper">saved only on this device</p>
-</div>
-<div class="row">
-  <button class="secondary" id="clearBtn">clear history</button>
-</div>
-<div id="map"></div>
-<div class="wrap">
-  <table id="pointsTable">
-    <thead><tr><th>time</th><th>lat</th><th>lng</th><th>accuracy</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</div>
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
 <script>
-  const STORAGE_KEY = "myLocationHistory";
+  const firebaseConfig = {
+    apiKey: "AIzaSyAl_uYFgzSIqfg1p2CLMgP0lGsmkR5fJvI",
+    authDomain: "my-location-app-204c4.firebaseapp.com",
+    databaseURL: "https://my-location-app-204c4-default-rtdb.firebaseio.com",
+    projectId: "my-location-app-204c4",
+    storageBucket: "my-location-app-204c4.firebasestorage.app",
+    messagingSenderId: "359565273563",
+    appId: "1:359565273563:web:716c70bffce2af3c2d1ffe",
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  const params = new URLSearchParams(location.search);
+  const token = params.get("t");
+
   const btn = document.getElementById("btn");
-  const clearBtn = document.getElementById("clearBtn");
   const helper = document.getElementById("helper");
-  const tbody = document.querySelector("#pointsTable tbody");
+  const card = document.getElementById("card");
 
-  const map = L.map("map").setView([20, 0], 2);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "&copy; OpenStreetMap contributors", maxZoom: 19,
-  }).addTo(map);
-  let polyline = L.polyline([], { color: "#4f8cff" }).addTo(map);
-  let latestMarker = null;
-
-  function loadPoints() {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    } catch {
-      return [];
-    }
-  }
-
-  function savePoints(points) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
-  }
-
-  function fmtMeters(acc) {
-    return typeof acc === "number" ? `${Math.round(acc)}m` : "unknown";
-  }
-
-  function redraw() {
-    const points = loadPoints();
-    polyline.setLatLngs(points.map(p => [p.lat, p.lng]));
-
-    if (latestMarker) map.removeLayer(latestMarker);
-    const last = points[points.length - 1];
-    if (last) {
-      latestMarker = L.marker([last.lat, last.lng]).addTo(map);
-      map.setView([last.lat, last.lng], Math.max(map.getZoom(), 14));
-    }
-
-    tbody.innerHTML = "";
-    for (const p of [...points].reverse()) {
-      const tr = document.createElement("tr");
-      const time = new Date(p.ts).toLocaleString();
-      tr.innerHTML = `<td>${time}</td><td>${p.lat.toFixed(5)}</td><td>${p.lng.toFixed(5)}</td><td>${fmtMeters(p.acc)}</td>`;
-      tr.addEventListener("click", () => map.setView([p.lat, p.lng], 16));
-      tbody.appendChild(tr);
-    }
-  }
+  let watchId = null;
+  let lastPingAt = 0;
+  const MIN_PING_INTERVAL_MS = 45000;
 
   function showError(msg) {
     helper.textContent = msg;
@@ -104,38 +59,76 @@
     btn.disabled = false;
   }
 
-  function showSaved(pos) {
-    helper.textContent = `saved — accuracy ${fmtMeters(pos.coords.accuracy)}`;
-    helper.className = "muted";
-    btn.disabled = false;
+  function fmtMeters(acc) {
+    return typeof acc === "number" ? `${Math.round(acc)}m` : "unknown";
   }
 
+  async function sendPing(pos) {
+    const { latitude, longitude, accuracy } = pos.coords;
+    if (accuracy > 5000) return false;
+    try {
+      await db.ref(`locations/${token}`).push({
+        lat: latitude, lng: longitude, acc: accuracy, ts: Date.now(),
+      });
+      return true;
+    } catch (err) {
+      helper.textContent = "sent, but couldn't confirm save (offline?)";
+      helper.className = "muted";
+      return false;
+    }
+  }
+
+  function showSuccess(pos) {
+    const geoUri = `geo:${pos.coords.latitude},${pos.coords.longitude}`;
+    card.innerHTML = `
+      <div class="ok">location shared ✅</div>
+      <p class="muted">accuracy: ${fmtMeters(pos.coords.accuracy)}</p>
+      <p class="muted"><a href="${geoUri}">open in maps app</a></p>
+    `;
+  }
+
+  async function handleFirstFix(pos) {
+    await sendPing(pos);
+    lastPingAt = Date.now();
+    showSuccess(pos);
+    startWatching();
+  }
+
+  function startWatching() {
+    if (watchId !== null || !("geolocation" in navigator)) return;
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const now = Date.now();
+        if (now - lastPingAt < MIN_PING_INTERVAL_MS) return;
+        lastPingAt = now;
+        sendPing(pos);
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0 }
+    );
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+  });
+
   btn.addEventListener("click", () => {
+    if (!token) { showError("this link is missing its token"); return; }
     if (location.protocol !== "https:" && location.hostname !== "localhost") {
       showError("this page needs https to access location"); return;
     }
     if (!("geolocation" in navigator)) {
-      showError("this browser doesn't support location"); return;
+      showError("this browser doesn't support location sharing"); return;
     }
     btn.disabled = true;
     helper.textContent = "getting your location…";
     helper.className = "muted";
 
-    // must be called directly inside the click handler, or iOS Safari
-    // silently suppresses the permission prompt
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const points = loadPoints();
-        points.push({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          acc: pos.coords.accuracy,
-          ts: Date.now(),
-        });
-        savePoints(points);
-        redraw();
-        showSaved(pos);
-      },
+      handleFirstFix,
       (err) => {
         if (err.code === err.PERMISSION_DENIED) showError("permission denied — allow location and try again");
         else if (err.code === err.TIMEOUT) showError("timed out — try again, maybe move outside");
@@ -144,15 +137,6 @@
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
   });
-
-  clearBtn.addEventListener("click", () => {
-    if (confirm("clear all saved location history?")) {
-      localStorage.removeItem(STORAGE_KEY);
-      redraw();
-    }
-  });
-
-  redraw();
 </script>
 </body>
 </html>
