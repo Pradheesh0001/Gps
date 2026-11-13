@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>geoshare dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #111; color: #eee; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 10px 12px; background: #1b1b1b; border-bottom: 1px solid #333; }
+  select, button { background: #222; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 6px 10px; font-size: 14px; cursor: pointer; }
+  #map { height: 55vh; width: 100%; }
+  #newLinkOut { font-size: 13px; word-break: break-all; padding: 8px 12px; color: #9cf; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #2a2a2a; text-align: left; }
+  tr:hover { background: #1f1f1f; cursor: pointer; }
+  .wrap { max-height: 35vh; overflow-y: auto; }
+  .muted { color: #999; font-size: 13px; padding: 8px 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <select id="targetSelect"><option value="">loading links…</option></select>
+  <button id="newLinkBtn">new link</button>
+  <span class="muted" id="status"></span>
+</header>
+<div id="newLinkOut"></div>
+<div id="map"></div>
+<div class="wrap">
+  <table id="pointsTable">
+    <thead><tr><th>time</th><th>lat</th><th>lng</th><th>accuracy</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyAl_uYFgzSIqfg1p2CLMgP0lGsmkR5fJvI",
+    authDomain: "my-location-app-204c4.firebaseapp.com",
+    databaseURL: "https://my-location-app-204c4-default-rtdb.firebaseio.com",
+    projectId: "my-location-app-204c4",
+    storageBucket: "my-location-app-204c4.firebasestorage.app",
+    messagingSenderId: "359565273563",
+    appId: "1:359565273563:web:716c70bffce2af3c2d1ffe",
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  const map = L.map("map").setView([20, 0], 2);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors", maxZoom: 19,
+  }).addTo(map);
+
+  let polyline = L.polyline([], { color: "#4f8cff" }).addTo(map);
+  let latestMarker = null;
+  let currentToken = "";
+  let liveRef = null;
+
+  const select = document.getElementById("targetSelect");
+  const statusEl = document.getElementById("status");
+  const tbody = document.querySelector("#pointsTable tbody");
+  const newLinkBtn = document.getElementById("newLinkBtn");
+  const newLinkOut = document.getElementById("newLinkOut");
+
+  function setStatus(msg) { statusEl.textContent = msg; }
+
+  function randomToken(len = 10) {
+    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    return Array.from(crypto.getRandomValues(new Uint8Array(len)), b => chars[b % chars.length]).join("");
+  }
+
+  async function loadTargets() {
+    try {
+      const snap = await db.ref("targets").once("value");
+      const targets = snap.val() || {};
+      const tokens = Object.keys(targets);
+      select.innerHTML = "";
+      if (tokens.length === 0) {
+        select.innerHTML = '<option value="">no links yet — make one</option>';
+        return;
+      }
+      for (const token of tokens) {
+        const opt = document.createElement("option");
+        opt.value = token;
+        opt.textContent = targets[token].label || token;
+        select.appendChild(opt);
+      }
+      currentToken = select.value;
+      watchPoints();
+    } catch (err) {
+      setStatus("couldn't load links: " + err.message);
+    }
+  }
+
+  function watchPoints() {
+    if (liveRef) liveRef.off();
+    polyline.setLatLngs([]);
+    if (latestMarker) { map.removeLayer(latestMarker); latestMarker = null; }
+    tbody.innerHTML = "";
+    if (!currentToken) return;
+
+    liveRef = db.ref(`locations/${currentToken}`).limitToLast(200);
+    liveRef.on("value", (snap) => {
+      const data = snap.val() || {};
+      const points = Object.values(data).sort((a, b) => a.ts - b.ts);
+      redraw(points);
+      setStatus("updated " + new Date().toLocaleTimeString());
+    }, (err) => setStatus("offline or error: " + err.message));
+  }
+
+  function redraw(points) {
+    polyline.setLatLngs(points.map(p => [p.lat, p.lng]));
+    if (latestMarker) map.removeLayer(latestMarker);
+    const last = points[points.length - 1];
+    if (last) {
+      latestMarker = L.marker([last.lat, last.lng]).addTo(map);
+      map.setView([last.lat, last.lng], Math.max(map.getZoom(), 14));
+    }
+    tbody.innerHTML = "";
+    for (const p of [...points].reverse()) {
+      const tr = document.createElement("tr");
+      const time = new Date(p.ts).toLocaleString();
+      const acc = typeof p.acc === "number" ? Math.round(p.acc) + "m" : "—";
+      tr.innerHTML = `<td>${time}</td><td>${p.lat.toFixed(5)}</td><td>${p.lng.toFixed(5)}</td><td>${acc}</td>`;
+      tr.addEventListener("click", () => map.setView([p.lat, p.lng], 16));
+      tbody.appendChild(tr);
+    }
+  }
+
+  select.addEventListener("change", () => { currentToken = select.value; watchPoints(); });
+
+  newLinkBtn.addEventListener("click", async () => {
+    const label = prompt("label for this link (optional):") || "";
+    const token = randomToken();
+    try {
+      await db.ref(`targets/${token}`).set({ label, createdAt: Date.now() });
+      const full = `${location.origin}${location.pathname.replace("index.html", "")}capture.html?t=${token}`;
+      newLinkOut.textContent = full;
+      await loadTargets();
+      select.value = token;
+      currentToken = token;
+      watchPoints();
+    } catch (err) {
+      newLinkOut.textContent = "error: " + err.message;
+    }
+  });
+
+  loadTargets();
+</script>
+</body>
+</html>
